@@ -28,12 +28,24 @@ export const CONTRACT_IDS = {
 
 const STROOPS_PER_XLM = 10_000_000n;
 
-export function xlmToStroops(xlm: number): bigint {
-  return BigInt(Math.round(xlm * 10_000_000));
+/**
+ * XLM as written, to stroops, exactly.
+ *
+ * Not Math.round(xlm * 10_000_000): that goes through a double, which cannot
+ * hold every stroop value, so large amounts stop round-tripping. Parsed as
+ * digits instead.
+ */
+export function xlmToStroops(xlm: string): bigint {
+  const m = /^(\d+)(?:\.(\d{1,7}))?$/.exec(String(xlm).trim());
+  if (!m) throw new Error(`Expected an amount like 2.5, got "${xlm}"`);
+  return BigInt(m[1]) * STROOPS_PER_XLM + BigInt((m[2] ?? '').padEnd(7, '0'));
 }
 
-export function stroopsToXlm(stroops: bigint): number {
-  return Number(stroops) / Number(STROOPS_PER_XLM);
+/** Stroops to a display string, without inventing precision. */
+export function stroopsToXlm(stroops: bigint): string {
+  const whole = stroops / STROOPS_PER_XLM;
+  const frac = (stroops % STROOPS_PER_XLM).toString().padStart(7, '0');
+  return `${whole}.${frac}`.replace(/0+$/, '').replace(/\.$/, '');
 }
 
 /** Submit a fully-signed XDR envelope to the network. */
@@ -77,23 +89,47 @@ export async function fetchContractEvents(contractId: string, startLedger: numbe
   return response.events;
 }
 
-/** Query current velocity state for a user from GuardContract. */
-export async function getVelocityState(userAddress: string) {
+export interface VelocityState {
+  /** null means the user has set no limit, which is different from a limit of zero. */
+  limitStroops: string | null;
+  spentStroops: string;
+  limitXlm: string | null;
+  spentXlm: string;
+  remainingXlm: string | null;
+  guarded: boolean;
+}
+
+/**
+ * Current daily spend state for a user.
+ *
+ * This called `get_limit` and `get_spent`, which the contract has never had --
+ * its getters are `limit_of` and `spent_today`. Both calls were wrapped in
+ * .catch(() => null), so the missing methods raised nothing and the endpoint
+ * returned a confident 0 / 0. Every dashboard read a limit of zero and nobody
+ * saw an error.
+ */
+export async function getVelocityState(userAddress: string): Promise<VelocityState> {
   const userScVal = nativeToScVal(Address.fromString(userAddress), { type: 'address' });
+
+  // No .catch here. If a call fails the caller gets a 500 saying so, which is
+  // information; a silent zero is not.
   const [limit, spent] = await Promise.all([
-    simulateContractCall(CONTRACT_IDS.guard, 'get_limit', [userScVal]).catch(() => null),
-    simulateContractCall(CONTRACT_IDS.guard, 'get_spent', [userScVal]).catch(() => null),
+    simulateContractCall(CONTRACT_IDS.guard, 'limit_of', [userScVal]),
+    simulateContractCall(CONTRACT_IDS.guard, 'spent_today', [userScVal]),
   ]);
 
-  const limitStroops = BigInt(limit ?? 0);
-  const spentStroops = BigInt(spent ?? 0);
+  const limitStroops = limit === null || limit === undefined ? null : BigInt(limit as bigint);
+  const spentStroops = BigInt((spent as bigint) ?? 0n);
+  const remaining =
+    limitStroops !== null && limitStroops > spentStroops ? limitStroops - spentStroops : 0n;
 
   return {
-    limitXlm: stroopsToXlm(limitStroops),
-    spentXlm: stroopsToXlm(spentStroops),
-    remainingXlm: stroopsToXlm(limitStroops - spentStroops < 0n ? 0n : limitStroops - spentStroops),
-    limitStroops: limitStroops.toString(),
+    limitStroops: limitStroops === null ? null : limitStroops.toString(),
     spentStroops: spentStroops.toString(),
+    limitXlm: limitStroops === null ? null : stroopsToXlm(limitStroops),
+    spentXlm: stroopsToXlm(spentStroops),
+    remainingXlm: limitStroops === null ? null : stroopsToXlm(remaining),
+    guarded: limitStroops !== null && limitStroops > 0n,
   };
 }
 

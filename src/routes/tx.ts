@@ -9,8 +9,12 @@ const router = Router();
  * Submits to Soroban RPC and returns the network response.
  */
 router.post('/relay', async (req: Request, res: Response) => {
-  const { xdr } = req.body as { xdr?: string };
-  if (!xdr) return res.status(400).json({ error: 'xdr required' });
+  // The frontend sent `signedXdr` and this route read `xdr`, so every relay
+  // was answered with a 400. Both spellings are accepted now, and the name is
+  // written down in API.md so the next one does not drift.
+  const body = req.body as { xdr?: string; signedXdr?: string };
+  const xdr = body.xdr ?? body.signedXdr;
+  if (!xdr) return res.status(400).json({ error: 'xdr (or signedXdr) required' });
 
   try {
     const result = await relayXDR(xdr);
