@@ -20,19 +20,48 @@ describe("derToCompact", () => {
     expect(compact.length).toBe(64);
   });
 
-  it("survives every signature, including short r or s", () => {
-    // DER stores minimal integers, so roughly 1 in 256 signatures has a
-    // component shorter than 32 bytes. The old code threw on those. Signing
-    // many messages makes it near-certain we hit one.
+  it("survives every signature real signing produces", () => {
     const { privateKey } = p256();
-    let shortSeen = 0;
     for (let i = 0; i < 400; i++) {
-      const sig = crypto.sign("sha256", Buffer.from(`m${i}`), privateKey);
-      // r length lives at byte 3 of a two-INTEGER SEQUENCE.
-      if (sig[3] < 32 || sig[3 + sig[3] + 2] < 32) shortSeen++;
-      expect(derToCompact(sig).length).toBe(64);
+      expect(derToCompact(crypto.sign("sha256", Buffer.from(`m${i}`), privateKey)).length).toBe(64);
     }
-    expect(shortSeen).toBeGreaterThan(0);
+  });
+
+  /**
+   * The short-component case is built, not waited for.
+   *
+   * This used to sign 400 messages and assert that at least one had a
+   * component under 32 bytes. That is about a 1-in-130 event per signature, so
+   * the assertion held roughly 96 times in 100 -- and failed the other four,
+   * which is exactly what it did in CI. A test that fails one run in twenty
+   * teaches people to re-run CI instead of reading it. The encoding is what is
+   * under test, and an encoding can be written down.
+   */
+  it("left-pads a short component instead of throwing", () => {
+    const r = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(30, 0xab)]); // 31 bytes
+    const s = Buffer.concat([Buffer.from([0x7f]), Buffer.alloc(31, 0xcd)]); // 32 bytes
+    const der = Buffer.concat([
+      Buffer.from([0x30, 4 + r.length + s.length, 0x02, r.length]),
+      r,
+      Buffer.from([0x02, s.length]),
+      s,
+    ]);
+
+    const compact = derToCompact(der);
+    expect(compact.length).toBe(64);
+    expect(compact.subarray(0, 32)).toEqual(Buffer.concat([Buffer.alloc(1), r]));
+    expect(compact.subarray(32)).toEqual(s);
+  });
+
+  it("rejects a component longer than a P-256 scalar", () => {
+    const big = Buffer.alloc(33, 0xff);
+    const der = Buffer.concat([
+      Buffer.from([0x30, 4 + big.length * 2, 0x02, big.length]),
+      big,
+      Buffer.from([0x02, big.length]),
+      big,
+    ]);
+    expect(() => derToCompact(der)).toThrow(/longer than a P-256 scalar/);
   });
 
   it("produces a compact signature that still verifies", () => {
