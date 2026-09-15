@@ -1,4 +1,5 @@
 import {
+  Account,
   Horizon,
   rpc,
   TransactionBuilder,
@@ -25,6 +26,46 @@ export const CONTRACT_IDS = {
   registry: process.env.REGISTRY_CONTRACT_ID || '',
   auth: process.env.AUTH_CONTRACT_ID || '',
 };
+
+export type ContractName = keyof typeof CONTRACT_IDS;
+
+/**
+ * A contract id, or a message naming the variable that is missing.
+ *
+ * These default to the empty string, and `new Contract('')` throws
+ * `invalid contract id` from deep inside the SDK. An unconfigured deployment
+ * should say which environment variable to set, not produce a stack trace
+ * about an encoding.
+ */
+export function contractId(name: ContractName): string {
+  const id = CONTRACT_IDS[name];
+  if (!id) {
+    throw new Error(
+      `${name.toUpperCase()}_CONTRACT_ID is not set. Deploy the contracts and ` +
+        `set it in the environment — see DEPLOYMENT.md.`,
+    );
+  }
+  return id;
+}
+
+/**
+ * The source account every read is simulated against.
+ *
+ * Simulation does not submit, sign, or charge anything, so this only has to be
+ * a syntactically valid account. It is the all-zero account, built locally.
+ *
+ * What was here before was a 55-character string where a Stellar public key is
+ * 56 — a typo, but a load-bearing one. It was passed to `getAccount`, which
+ * rejected it; the rejection was swallowed by a `.catch` that substituted a
+ * stub carrying the same bad id; and the transaction then failed to encode.
+ * The result was that every read endpoint — /guard/velocity and
+ * /registry/drips, the two calls the dashboard actually makes — answered 500
+ * with `invalid encoded string`, on every request, in every environment. The
+ * `.catch` is why it read as an encoding problem rather than a bad address.
+ *
+ * Building the account locally also removes a network round trip per read.
+ */
+export const SIMULATION_SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 
 const STROOPS_PER_XLM = 10_000_000n;
 
@@ -56,16 +97,14 @@ export async function relayXDR(xdrString: string) {
 
 /** Read-only Soroban contract call (simulation only, no signing). */
 export async function simulateContractCall(
-  contractId: string,
+  id: string,
   method: string,
   args: xdr.ScVal[]
 ) {
-  const contract = new Contract(contractId);
-  const account = await sorobanServer.getAccount(
-    'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN' // fee-only source, never signs
-  ).catch(() => ({ accountId: () => 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', sequenceNumber: () => '0', incrementSequenceNumber: () => {} }));
+  const contract = new Contract(id);
+  const account = new Account(SIMULATION_SOURCE, '0');
 
-  const tx = new TransactionBuilder(account as any, {
+  const tx = new TransactionBuilder(account, {
     fee: '100',
     networkPassphrase: NETWORK,
   })
@@ -114,8 +153,8 @@ export async function getVelocityState(userAddress: string): Promise<VelocitySta
   // No .catch here. If a call fails the caller gets a 500 saying so, which is
   // information; a silent zero is not.
   const [limit, spent] = await Promise.all([
-    simulateContractCall(CONTRACT_IDS.guard, 'limit_of', [userScVal]),
-    simulateContractCall(CONTRACT_IDS.guard, 'spent_today', [userScVal]),
+    simulateContractCall(contractId('guard'), 'limit_of', [userScVal]),
+    simulateContractCall(contractId('guard'), 'spent_today', [userScVal]),
   ]);
 
   const limitStroops = limit === null || limit === undefined ? null : BigInt(limit as bigint);
@@ -136,6 +175,6 @@ export async function getVelocityState(userAddress: string): Promise<VelocitySta
 /** Check if an address is a trusted drip in RegistryContract. */
 export async function isTrustedDrip(dripAddress: string): Promise<boolean> {
   const scVal = nativeToScVal(Address.fromString(dripAddress), { type: 'address' });
-  const result = await simulateContractCall(CONTRACT_IDS.registry, 'is_trusted_drip', [scVal]);
+  const result = await simulateContractCall(contractId('registry'), 'is_trusted_drip', [scVal]);
   return Boolean(result);
 }

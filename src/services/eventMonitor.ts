@@ -44,6 +44,13 @@ async function poll() {
 }
 
 export function startEventMonitor() {
+  // A 10-second interval belongs to a process that stays up. On a serverless
+  // platform it is armed again on every cold start and killed with the
+  // invocation, so it does no polling and only costs time.
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    console.warn('[event-monitor] serverless runtime — not starting the poller');
+    return;
+  }
   if (!CONTRACT_IDS.guard && !CONTRACT_IDS.registry && !CONTRACT_IDS.auth) {
     console.warn('[event-monitor] No contract IDs configured — skipping monitor');
     return;

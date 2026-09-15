@@ -1,9 +1,23 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { derToCompact, coseToUncompressed } from '../lib/webauthn';
-import { setChallenge, popChallenge } from '../lib/redis';
+import { setChallenge, popChallenge, challengeStoreStatus } from '../lib/redis';
 
 const router = Router();
+
+/**
+ * Refuse rather than weaken.
+ *
+ * Without a shared store a challenge cannot be made single-use, and a
+ * challenge that can be replayed is not doing the job it exists for. This says
+ * so with a 503 and a reason, instead of falling back to something that looks
+ * like it works.
+ */
+router.use((_req, res, next) => {
+  const store = challengeStoreStatus();
+  if (!store.available) return res.status(503).json({ error: store.reason });
+  return next();
+});
 
 /**
  * POST /auth/challenge

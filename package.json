@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node-dev --respawn src/index.ts",
+    "start": "node dist/server.js",
+    "dev": "ts-node-dev --respawn src/server.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run"
   },

@@ -81,6 +81,12 @@ async function runWaveCycle() {
 
 /** Schedule wave automation to run every Sunday at 00:00 UTC. */
 export function scheduleWaveAutomation() {
+  // Same reason as the event monitor: a timer set days into the future cannot
+  // survive in a runtime that is torn down after each request.
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    console.warn('[wave] serverless runtime — not scheduling');
+    return;
+  }
   const msUntilNextSunday = () => {
     const now = new Date();
     const day = now.getUTCDay(); // 0 = Sunday
